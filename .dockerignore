@@ -30,3 +30,6 @@
 *.exe
 *.out
 *.app
+
+# I don't want my README.md file copied
+README.md
