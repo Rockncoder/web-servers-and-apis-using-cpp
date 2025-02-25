@@ -1,59 +1,89 @@
 # ---- BUILD STAGE ----
-    FROM debian:buster-slim AS builder
+FROM debian:buster-slim AS builder
 
-    RUN apt-get -qq update && \
-        apt-get -qq install -y --no-install-recommends \
-        cmake \
-        ninja-build \
-        make \
-        build-essential \
-        python3 \
-        g++ \
-        wget \
-        curl \
-        ca-certificates \
-        libboost-dev \
-        libboost-system-dev \
-        libboost-filesystem-dev && \
-        apt-get clean && rm -rf /var/lib/apt/lists/*
+# Install necessary build tools and dependencies
+RUN apt-get -qq update && \
+    apt-get -qq install -y --no-install-recommends \
+    ca-certificates \
+    cmake \
+    make \
+    build-essential \
+    libboost-dev \
+    libboost-system-dev \
+    libboost-filesystem-dev \
+    libasio-dev \
+    libssl-dev \
+    libsasl2-dev \
+    pkg-config \
+    git \
+    wget \
+    python3 \
+    python3-pip && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-    # Download Crow
-    WORKDIR /tmp
-    RUN wget "https://github.com/ipkn/crow/releases/download/v0.1/crow_all.h"
+RUN update-ca-certificates
 
-    #Download .gitignore
-    RUN wget "https://raw.githubusercontent.com/github/gitignore/main/C++.gitignore" -O cpp.gitignore
+# Set environment variables for installation paths
+ENV INSTALL_PREFIX=/usr/local
+ENV C_DRIVER_VERSION=1.17.2
+ENV CXX_DRIVER_VERSION=r3.6.6
 
+# Install MongoDB C Driver (libmongoc)
+RUN cd /tmp && \
+    wget https://github.com/mongodb/mongo-c-driver/releases/download/${C_DRIVER_VERSION}/mongo-c-driver-${C_DRIVER_VERSION}.tar.gz && \
+    tar xzf mongo-c-driver-${C_DRIVER_VERSION}.tar.gz && \
+    cd mongo-c-driver-${C_DRIVER_VERSION} && \
+    mkdir cmake-build && \
+    cd cmake-build && \
+    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} .. && \
+    make -j"$(nproc)" && \
+    make install
 
-    # Make a directory for it all
-    RUN mkdir -p /app/hello_crow
+# Install MongoDB C++ Driver (mongocxx)
+RUN cd /tmp && \
+    git clone https://github.com/mongodb/mongo-cxx-driver.git --branch ${CXX_DRIVER_VERSION} --depth 1 && \
+    cd mongo-cxx-driver/build && \
+    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} -DCMAKE_PREFIX_PATH=${INSTALL_PREFIX} .. && \
+    make -j"$(nproc)" && \
+    make install
 
-    # Move the gitignore
-    RUN mv cpp.gitignore /app/hello_crow/.dockerignore
+# Create application directory
+RUN mkdir -p /app/hello_crow
 
-    # Add the hidden . to make it an ignore
-    RUN mv /app/hello_crow/.dockerignore  /app/hello_crow/.gitignore
+# Copy the application source code
+COPY hello_crow /app/hello_crow
 
-    # Copy the application source code (overridden by volume during development)
-    COPY hello_crow /app/hello_crow
+# Build the application
+WORKDIR /app/hello_crow/build
+RUN cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=${INSTALL_PREFIX} .. && \
+    make -j"$(nproc)"
 
-    # Move Crow header to the correct location
-    RUN mv crow_all.h /app/hello_crow/crow_all.h
+# ---- RUNTIME STAGE ----
+FROM debian:buster-slim AS runtime
 
-    # Build the application
-    WORKDIR /app/hello_crow/build
-    RUN cmake /app/hello_crow
-    RUN make
+# Install necessary runtime dependencies
+RUN apt-get -qq update && \
+    apt-get -qq install -y --no-install-recommends \
+    libboost-system1.67.0 \
+    libboost-filesystem1.67.0 \
+    libssl1.1 \
+    libsasl2-2 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-    # ---- RUNTIME STAGE ----
-    FROM debian:buster-slim AS runtime
+# Copy the built application from the builder stage
+COPY --from=builder /app/hello_crow/build/hello_crow /usr/local/bin/hello_crow
 
-    # Copy the built executable from the builder stage
-    COPY --from=builder /app/hello_crow/build/hello_crow /usr/local/bin/hello_crow
+# Copy necessary runtime libraries from the builder stage
+COPY --from=builder /usr/local/lib/libmongocxx.so.* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libbsoncxx.so.* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libmongoc-1.0.so.* /usr/local/lib/
+COPY --from=builder /usr/local/lib/libbson-1.0.so.* /usr/local/lib/
 
-    # Expose the port
-    EXPOSE 8080
+# Update the dynamic linker run-time bindings
+RUN ldconfig
 
-    # Command to run when the container starts
-    CMD ["/usr/local/bin/hello_crow"]
+# Expose the application port
+EXPOSE 8080
 
+# Command to run the application
+CMD ["/usr/local/bin/hello_crow"]
