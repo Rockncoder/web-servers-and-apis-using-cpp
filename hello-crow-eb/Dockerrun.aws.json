@@ -1,0 +1,20 @@
+{
+  "AWSEBDockerrunVersion": "1",
+  "Image": {
+    "Name": "<your-dockerhub-username>/hello_crow:latest",
+    "Update": "true"
+  },
+  "Ports": [
+    {
+      "ContainerPort": "8080",
+      "HostPort": "80"
+    }
+  ],
+  "Logging": "/var/log/nginx",
+  "environment": [
+    {
+      "Name": "PORT",
+      "Value": "8080"
+    }
+  ]
+}
